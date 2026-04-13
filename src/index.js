@@ -634,6 +634,63 @@ async function extractUserCheckinsForDateRange(jarPath, userId, startStr, endStr
   }
 }
 
+/**
+ * Fetches the HTML for the teams page and extracts all teams' names and ids.
+ * @param {string} jarPath - Path to the cookie jar file for authentication.
+ * @returns {Promise<Array<{name: string, id: string|null}>>} - List of team names and ids (id may be null if not found).
+ */
+async function extractTeamIdsFromTeamsPage(jarPath) {
+  const url = `${STEADY_BASE_URL}/teams`;
+  const html = await curlWithJar({ url, jarPath, method: "GET" });
+
+  const dataSearchPattern = /data-search="([^"]+)"/g;
+  const teamIdPattern = /<a\s+href="\/teams\/([^"]+)"/g;
+  const teamIds = [];
+
+  for (const dataSearchMatch of html.matchAll(dataSearchPattern)) {
+    // Find the next <a href="/teams/..." after this data-search
+    const teamName = dataSearchMatch[1];
+    const searchStart = dataSearchMatch.index + dataSearchMatch[0].length;
+    teamIdPattern.lastIndex = searchStart;
+    const teamMatch = teamIdPattern.exec(html);
+    if (teamMatch && teamMatch.index >= searchStart) {
+      teamIds.push({ name: teamName, id: teamMatch[1] });
+    } else {
+      teamIds.push({ name: teamName, id: null }); // Or undefined, means not found
+    }
+  }
+
+  return teamIds;
+}
+
+  // Extracts member info ({name, id}) from a team page given a jarPath and team_id
+  async function extractTeamMembers({ jarPath, team_id }) {
+    const url = `${STEADY_BASE_URL}/teams/${team_id}`;
+    const html = await curlWithJar({ url, jarPath, method: "GET" });
+    const membersSectionMatch = html.match(/<h2\s+class="card-heading"\s*>Members([\s\S]*?)(?=<h2\s+class="card-heading"|<\/body>)/i);
+    if (!membersSectionMatch) {
+      return []; // No members section found
+    }
+    const membersSection = membersSectionMatch[1].trim();
+    const anchorRegex = /<a\s+href="\/people\/([0-9a-f\-]+)"/gi;
+    const memberInfo = [];
+    let anchorMatch;
+    while ((anchorMatch = anchorRegex.exec(membersSection)) !== null) {
+      const id = anchorMatch[1];
+      // Search for the next <span class="truncate"> after this anchor tag
+      const afterAnchorHtml = membersSection.slice(anchorRegex.lastIndex);
+      const spanRegex = /<span\s+class="truncate"\s*>(.*?)<\/span>/i;
+      const spanMatch = spanRegex.exec(afterAnchorHtml);
+      let name = null;
+      if (spanMatch) {
+        name = spanMatch[1].trim();
+      }
+      memberInfo.push({ name, id });
+    }
+    return memberInfo;
+  }
+
+
 async function steadySubmitCheckin({
   jarPath,
   team,
@@ -747,12 +804,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "steady_list_teams",
-        description: "List available teams (name + id) from the check-in edit page for a date (default: today).",
+        description: "List all teams (name + id) the user belongs to, fetched from the /teams page.",
         inputSchema: {
           type: "object",
-          properties: {
-            date: { type: "string", description: "YYYY-MM-DD (optional; default: today)" },
-          },
+          properties: {},
           required: [],
         },
       },
@@ -768,6 +823,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             end_date: { type: "string", description: "End date in YYYY-MM-DD format (optional; default: today)." },
           },
           required: ["user_id", "start_date"],
+        },
+      },
+      {
+        name: "steady_list_members",
+        description:
+          "List all members (name + id) of a given team.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            team_id: { type: "string", description: "The Steady team UUID." },
+          },
+          required: ["team_id"],
         },
       },
       {
@@ -840,9 +907,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === "steady_list_teams") {
-    const date = args.date ? String(args.date) : undefined;
-    const res = await steadyListTeams({ jarPath, date });
-    return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
+    const teams = await extractTeamIdsFromTeamsPage(jarPath);
+    return { content: [{ type: "text", text: JSON.stringify({ teams }, null, 2) }] };
   }
 
   if (name === "steady_get_checkins") {
@@ -851,6 +917,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const endDate = args.end_date ? String(args.end_date) : undefined;
     const bodies = await extractUserCheckinsForDateRange(jarPath, userId, startDate, endDate);
     return { content: [{ type: "text", text: JSON.stringify(bodies, null, 2) }] };
+  }
+
+  if (name === "steady_list_members") {
+    const teamId = String(args.team_id);
+    const members = await extractTeamMembers({ jarPath, team_id: teamId });
+    return { content: [{ type: "text", text: JSON.stringify({ team_id: teamId, members }, null, 2) }] };
   }
 
   if (name === "steady_submit_checkin") {
@@ -881,13 +953,9 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.log("Connected to steady-mcp server");
-
-  // let start = '2026-01-01';
-  // let values = await extractUserCheckinsForDateRange(defaultCookieJarPath(), "ea71f1be-acbf-4a05-b442-0d83c5fac0ae", start);
-  // const checkins = await steadyGetUserCheckins({ jarPath: defaultCookieJarPath(), userId: "ea71f1be-acbf-4a05-b442-0d83c5fac0ae" });
-  // console.log(checkins['hasNextPage']);
-  // console.log(checkins['contentCardBodies']);
-  // console.log(values);
+  const members = await extractTeamMembers({ jarPath: defaultCookieJarPath(), team_id: '6a0f8245-7fb9-4a74-a563-6c0217829fb7' });
+  console.log("Extracted Member Names and IDs:");
+  console.log(members);
 }
 
 main().catch((err) => {
