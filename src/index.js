@@ -882,12 +882,12 @@ async function main() {
   await server.connect(transport);
   console.log("Connected to steady-mcp server");
 
-  let start = '2026-01-01';
-  let values = await extractUserCheckinsForDateRange(defaultCookieJarPath(), "ea71f1be-acbf-4a05-b442-0d83c5fac0ae", start);
+  // let start = '2026-01-01';
+  // let values = await extractUserCheckinsForDateRange(defaultCookieJarPath(), "ea71f1be-acbf-4a05-b442-0d83c5fac0ae", start);
   // const checkins = await steadyGetUserCheckins({ jarPath: defaultCookieJarPath(), userId: "ea71f1be-acbf-4a05-b442-0d83c5fac0ae" });
   // console.log(checkins['hasNextPage']);
   // console.log(checkins['contentCardBodies']);
-  console.log(values);
+  // console.log(values);
 }
 
 main().catch((err) => {
