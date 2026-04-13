@@ -540,6 +540,52 @@ async function steadyListTeams({ jarPath, date }) {
   return { date: isoDate, teams };
 }
 
+async function steadyGetUserCheckins({ jarPath, userId, page=1 }) {
+  const url = `${STEADY_BASE_URL}/people/${userId}?page=${page}`;
+  console.log(url);
+  const html = await curlWithJar({ url, jarPath, method: "GET" });
+  // Extract all <div class="content-card__body">...</div> from the HTML, process one by one
+  const contentCardBodies = [];
+  const contentCardBodyRe = /<div\s+class="content-card__body"[^>]*>([\s\S]*?)<\/div>/gi;
+  let contentCardMatch;
+  while ((contentCardMatch = contentCardBodyRe.exec(html)) !== null) {
+    // For each <div class="content-card__body">...</div>, extract <time-ago ... datetime="..."></time-ago> and print the datetime attribute if found.
+    const timeAgoMatch = contentCardMatch[1].match(/<time-ago\b[^>]*datetime="([^"]+)"/i);
+    let timeAgoDate = null;
+    if (timeAgoMatch && timeAgoMatch[1]) {
+      timeAgoDate = new Date(timeAgoMatch[1]);
+    }
+    console.log(timeAgoMatch[1])
+    console.log("*************************************")
+    // Find the first <div ... data-status-answer-component ...> that appears immediately after the content-card__body div in the HTML
+    // Use contentCardMatch.index + contentCardMatch[0].length as the search starting point
+    let singleStatusComponent = null;
+    let afterEndIdx = contentCardMatch.index + contentCardMatch[0].length;
+    const afterBodyHtml = html.slice(afterEndIdx);
+    const singleDataStatusMatch = afterBodyHtml.match(/<div\b[^>]*data-status-answer-component[^>]*>([\s\S]*?)<\/div>/i);
+    if (singleDataStatusMatch) {
+      singleStatusComponent = singleDataStatusMatch[1];
+      const stripHtml = (str) => str.replace(/<[^>]*>/g, '').replace(/\\n/g, '\n').replace(/[\n+]/g, ',').trim();
+      singleStatusComponent = stripHtml(singleStatusComponent);
+      // console.log('data-status-answer-component RIGHT AFTER content-card__body:', singleStatusComponent);
+    }
+    // Remove all HTML tags from contentCardMatch[1]
+    // replace \n with new line, remove
+    const stripHtml = (str) => str.replace(/<[^>]*>/g, '').replace(/\\n/g, '\n').replace(/[\n+]/g, ',').trim();
+    const bodyText = stripHtml(contentCardMatch[1]);
+    const combinedText = [bodyText, singleStatusComponent].filter(Boolean).join(' --- ');
+    let cleanedCombinedText = combinedText.replace(/\bToday\b/g, '');
+    cleanedCombinedText = cleanedCombinedText.replace(/\Yesterday\b/g, '');
+    contentCardBodies.push({ timeAgoDate: timeAgoDate, body: cleanedCombinedText });
+  }
+
+  // return both the bool and contentCardBodies
+  // Extract the first hyperlink (<a ...>) that starts with "Next" in the HTML and get its href value
+  const nextLinkMatch = html.match(/<a\s+[^>]*href="([^"]+)"[^>]*>\s*Next\b[\s\S]*?<\/a>/i);
+  const hasNextPage = Boolean(nextLinkMatch);
+  return { hasNextPage, contentCardBodies };
+}
+
 async function steadySubmitCheckin({
   jarPath,
   team,
@@ -761,8 +807,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function main() {
+  console.log("Starting steady-mcp server...");
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  console.log("Connected to steady-mcp server");
+
+  const checkins = await steadyGetUserCheckins({ jarPath: defaultCookieJarPath(), userId: "ea71f1be-acbf-4a05-b442-0d83c5fac0ae" });
+  console.log(checkins['hasNextPage']);
+  console.log(checkins['contentCardBodies']);
 }
 
 main().catch((err) => {
