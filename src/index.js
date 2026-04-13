@@ -165,6 +165,10 @@ function getLocalISODate(date = new Date()) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function toDateStr(date) {
+  return getLocalISODate(date instanceof Date ? date : new Date(date));
+}
+
 function escapeHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -555,8 +559,8 @@ async function steadyGetUserCheckins({ jarPath, userId, page=1 }) {
     if (timeAgoMatch && timeAgoMatch[1]) {
       timeAgoDate = new Date(timeAgoMatch[1]);
     }
-    console.log(timeAgoMatch[1])
-    console.log("*************************************")
+    // console.log(timeAgoMatch[1])
+    // console.log("*************************************")
     // Find the first <div ... data-status-answer-component ...> that appears immediately after the content-card__body div in the HTML
     // Use contentCardMatch.index + contentCardMatch[0].length as the search starting point
     let singleStatusComponent = null;
@@ -584,6 +588,50 @@ async function steadyGetUserCheckins({ jarPath, userId, page=1 }) {
   const nextLinkMatch = html.match(/<a\s+[^>]*href="([^"]+)"[^>]*>\s*Next\b[\s\S]*?<\/a>/i);
   const hasNextPage = Boolean(nextLinkMatch);
   return { hasNextPage, contentCardBodies };
+}
+
+// date is in format 'yyyy-mm-dd'
+// set default value for endStr to today
+async function extractUserCheckinsForDateRange(jarPath, userId, startStr, endStr = toDateStr(new Date())) {
+  const bodies = [];
+  let page = 1;
+  let foundEndDate = false;
+
+  while (true) {
+    const { hasNextPage, contentCardBodies } = await steadyGetUserCheckins({ jarPath, userId, page });
+
+    if (!contentCardBodies.length) return bodies;
+
+    let startIdx = 0;
+
+    if (!foundEndDate) {
+      const firstDateStr = toDateStr(contentCardBodies[0].timeAgoDate);
+
+      if (firstDateStr < endStr) {
+        endStr = firstDateStr;
+        startIdx = 0;
+      } else {
+        startIdx = contentCardBodies.findIndex(
+          (entry) => toDateStr(entry.timeAgoDate) <= endStr,
+        );
+        if (startIdx === -1) {
+          if (hasNextPage) { page++; continue; }
+          return bodies;
+        }
+      }
+      foundEndDate = true;
+    }
+
+    for (let i = startIdx; i < contentCardBodies.length; i++) {
+      const entry = contentCardBodies[i];
+      const entryDateStr = toDateStr(entry.timeAgoDate);
+      bodies.push(entry.body);
+      if (entryDateStr <= startStr) {return bodies;}
+    }
+
+    if (hasNextPage) { page++; continue; }
+    return bodies;
+  }
 }
 
 async function steadySubmitCheckin({
@@ -709,6 +757,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "steady_get_checkins",
+        description:
+          "Get a user's check-ins for a date range. Returns the check-in text for each day in the range.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            user_id: { type: "string", description: "The Steady user UUID." },
+            start_date: { type: "string", description: "Start date in YYYY-MM-DD format." },
+            end_date: { type: "string", description: "End date in YYYY-MM-DD format (optional; default: today)." },
+          },
+          required: ["user_id", "start_date"],
+        },
+      },
+      {
         name: "steady_submit_checkin",
         description:
           "Submit today's Steady check-in for ONE team (no official API; uses Steady's web form). Supports: previous work, next work, blockers, and mood.",
@@ -783,6 +845,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return { content: [{ type: "text", text: JSON.stringify(res, null, 2) }] };
   }
 
+  if (name === "steady_get_checkins") {
+    const userId = String(args.user_id);
+    const startDate = String(args.start_date);
+    const endDate = args.end_date ? String(args.end_date) : undefined;
+    const bodies = await extractUserCheckinsForDateRange(jarPath, userId, startDate, endDate);
+    return { content: [{ type: "text", text: JSON.stringify(bodies, null, 2) }] };
+  }
+
   if (name === "steady_submit_checkin") {
     const team = String(args.team);
     const text = String(args.text);
@@ -812,9 +882,12 @@ async function main() {
   await server.connect(transport);
   console.log("Connected to steady-mcp server");
 
-  const checkins = await steadyGetUserCheckins({ jarPath: defaultCookieJarPath(), userId: "ea71f1be-acbf-4a05-b442-0d83c5fac0ae" });
-  console.log(checkins['hasNextPage']);
-  console.log(checkins['contentCardBodies']);
+  let start = '2026-01-01';
+  let values = await extractUserCheckinsForDateRange(defaultCookieJarPath(), "ea71f1be-acbf-4a05-b442-0d83c5fac0ae", start);
+  // const checkins = await steadyGetUserCheckins({ jarPath: defaultCookieJarPath(), userId: "ea71f1be-acbf-4a05-b442-0d83c5fac0ae" });
+  // console.log(checkins['hasNextPage']);
+  // console.log(checkins['contentCardBodies']);
+  console.log(values);
 }
 
 main().catch((err) => {
