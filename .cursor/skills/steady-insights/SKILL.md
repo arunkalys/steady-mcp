@@ -3,8 +3,9 @@ name: steady-insights
 description: >-
   Analyze Steady/StatusHero check-in data. Connects to the Steady MCP server,
   authenticates, lists teams and members, fetches check-ins for a date range,
-  and saves raw output to /tmp/. Use when the user mentions steady analysis,
-  statushero report, check-in summary, steady report, or analyze steady.
+  and saves raw data and processed summaries to /tmp/. Use when the user
+  mentions steady analysis, statushero report, check-in summary, steady
+  report, or analyze steady.
 ---
 
 # Analyze Steady / StatusHero
@@ -66,7 +67,7 @@ Then provide the snippet to add to Cursor's `mcp.json`:
 Tell the user to replace `<FULL_PATH>` with the actual absolute path and
 restart Cursor after editing `mcp.json`.
 
-**Gate:** Do not proceed until `steady_ping` is callable unless user explicitly asks to start with team selection.
+**Gate:** Do not proceed until `steady_ping` is callable unless user explicitly asks to start a specific phase.
 
 ---
 
@@ -163,8 +164,7 @@ in a single step. Example:
 }
 ```
 
-Do NOT use `allow_multiple: false` (or omit it). The user must be able to
-choose more than one member.
+Do NOT use `allow_multiple: false` (or omit it). The user must be able to choose more than one member.
 
 Store each selected `user_id` and `user_name`.
 
@@ -215,76 +215,78 @@ Store as `start_date` and `end_date`.
 
 ---
 
-## Phase 6: Fetch and Save
+## Phase 6: Fetch, Save, and Summarize
 
-For **each** selected member (`user_id` / `user_name`):
+Before starting, warn the user:
 
-1. Call MCP to get check-ins:
-   ```
-   CallMcpTool  server: "user-steady-mcp"  toolName: "steady_get_checkins"
-   arguments: { "user_id": "<user_id>", "start_date": "<start_date>", "end_date": "<end_date>" }
-   ```
-2. Build the output filename:
-   - Pattern: `/tmp/raw_<user_name>_<start_date>_<end_date>.txt`
-   - Replace all spaces in `user_name` with underscores.
-3. Write the full MCP response content to that file.
+> This may take several minutes depending on the date range selected and
+> the number of members. Please be patient while the data is fetched and
+> processed.
 
-After all members are processed, display the list of files written and note
-that these files only contain the raw data:
+For **each** selected member (`user_id` / `user_name`), complete **all**
+of the following steps before moving on to the next member:
+
+### Step 1 — Fetch raw check-ins
+
+Call MCP to get check-ins:
 
 ```
-Files written (raw data only):
+CallMcpTool  server: "user-steady-mcp"  toolName: "steady_get_checkins"
+arguments: { "user_id": "<user_id>", "start_date": "<start_date>", "end_date": "<end_date>" }
+```
+
+### Step 2 — Save raw data
+
+Build the output filename:
+- Pattern: `/tmp/raw_<user_name>_<start_date>_<end_date>.txt`
+- Replace all spaces in `user_name` with underscores.
+
+Write the full MCP response content to that file.
+
+### Step 3 — Process and summarize
+
+Read the raw file just written and process the contents with the following
+prompt — apply it yourself as the LLM, do **not** send it to an external
+service:
+
+> Process the raw check-in data below and produce a structured summary
+> for this team member. Extract and organize the following sections:
+>
+> **Main Areas of Work** — A detailed description of the primary areas
+> and projects the person focused on during this period.
+>
+> **Achievements** — A bullet list of concrete accomplishments,
+> milestones reached, and deliverables completed.
+>
+> **Work Categories** — Classify and highlight the types of work
+> performed. Call out any of the following that apply (omit categories
+> with no evidence):
+>   - Reliability / Engineering Efficiency work
+>   - Design Doc / EDD (Engineering Design Document) related work
+>   - Mentoring / Coaching work
+>   - Collaboration / Coordination across teams or orgs
+>
+> **Challenges** — Blockers, difficulties, or areas where progress was
+> slowed. Include context on how they were addressed if available.
+
+Write the processed summary to a new file:
+- Pattern: `/tmp/summary_<user_name>_<start_date>_<end_date>.md`
+- Use the same `user_name` (spaces replaced with underscores),
+  `start_date`, and `end_date` as the corresponding raw file.
+
+### After completing all members
+
+Display the list of all files written:
+
+```
+Files written:
 - /tmp/raw_Jane_Doe_2025-01-01_2025-06-30.txt
-- /tmp/raw_John_Smith_2025-01-01_2025-06-30.txt
-
-Note: These files only contain the raw check-in data from Steady.
-```
-
-Proceed to Phase 7.
-
----
-
-## Phase 7: Process and Summarize
-
-For **each** raw data file produced in Phase 6:
-
-1. Read the file (e.g. `/tmp/raw_<user_name>_<start_date>_<end_date>.txt`).
-2. Process the contents with the following prompt — apply it yourself as the
-   LLM, do **not** send it to an external service:
-
-   > Process the raw check-in data below and produce a structured summary
-   > for this team member. Extract and organize the following sections:
-   >
-   > **Main Areas of Work** — A detailed description of the primary areas
-   > and projects the person focused on during this period.
-   >
-   > **Achievements** — A bullet list of concrete accomplishments,
-   > milestones reached, and deliverables completed.
-   >
-   > **Work Categories** — Classify and highlight the types of work
-   > performed. Call out any of the following that apply (omit categories
-   > with no evidence):
-   >   - Reliability / Engineering Efficiency work
-   >   - Design Doc / EDD (Engineering Design Document) related work
-   >   - Mentoring / Coaching work
-   >   - Collaboration / Coordination across teams or orgs
-   >
-   > **Challenges** — Blockers, difficulties, or areas where progress was
-   > slowed. Include context on how they were addressed if available.
-
-3. Write the processed summary to a new file:
-   - Pattern: `/tmp/summary_<user_name>_<start_date>_<end_date>.md`
-   - Use the same `user_name` (spaces replaced with underscores),
-     `start_date`, and `end_date` as the corresponding raw file.
-
-After all members are processed, display the list of summary files:
-
-```
-Summary files written:
 - /tmp/summary_Jane_Doe_2025-01-01_2025-06-30.md
+- /tmp/raw_John_Smith_2025-01-01_2025-06-30.txt
 - /tmp/summary_John_Smith_2025-01-01_2025-06-30.md
 ```
 
-**Gate:** Every raw file from Phase 6 must have a corresponding summary file.
+**Gate:** Every selected member must have both a raw file and a corresponding
+summary file.
 
 Done.
